@@ -17,7 +17,7 @@ PHASE = {"label": "AMD USB Audio Device DISABLED", "start": "t0", "end": "t1", "
 seen = []
 
 class FakeSession:
-    def __init__(self, out, st, sink, on_status, gate=None, peer=None):
+    def __init__(self, out, st, sink, on_status, gate=None, peer=None, announce=None, leader=None):
         self.st, self.sink, self.on_status, self.stop, self.log = st, sink, on_status, threading.Event(), sink
     def run(self):
         self.sink("12:00:00.000  TEST_START     fake")
@@ -29,7 +29,7 @@ class FakeSession:
 d.Session = FakeSession
 sent = []
 theirs = {}
-d.Peers = lambda on_command, state, settings=None: types.SimpleNamespace(others=lambda: [('OtherPC', '10.0.0.2', 'ready')], command=lambda what, **kw: sent.append((what, kw)), newest_settings=lambda: theirs or None, heard=lambda: None)   # never talk to real PCs from a test
+d.Peers = lambda on_command, state, settings=None: types.SimpleNamespace(others=lambda: [('OtherPC', '10.0.0.2', 'ready')], command=lambda what, **kw: sent.append((what, kw)), newest_settings=lambda: theirs or None, heard=lambda: None, at=lambda step: False, leader_step=lambda: None)   # never talk to real PCs from a test
 
 root = tk.Tk()
 args = types.SimpleNamespace(device="Dante", no_link=False, minutes=None, out=tempfile.mkdtemp(), cont=None, exclusive=False, signal="tone", record=False)
@@ -69,15 +69,15 @@ assert "TEST_START" in text and "RESULT: FAIL - 1 dropout(s) totalling 9.5 s" in
 assert app.status["text"] == "Finished - FAIL (see below)" and str(app.btn_mon["state"]) == "normal", app.status["text"]
 cells = [w["text"] for w in app.table.winfo_children()]
 assert "FAIL: 1 dropout(s), 9.5 s" in cells and cells[0] == "Check" and app.table.winfo_manager() == "grid", cells   # the table of what failed
-assert sent == [("start", {"signal": "tone", "minutes": 5.0})], sent              # Start here is passed to the other PC
+assert sent == [("start", {"signal": "tone", "minutes": 5.0, "follow": False})], sent              # Start here is passed to the other PC
 app.poll()
 assert app.peer_var.get().startswith("Found OtherPC"), app.peer_var.get()
 app.handle("peer", {"t": "start", "host": "OtherPC", "signal": "music", "minutes": 2})   # and Start there starts a test here
 assert app.signal.get() == "music" and app.minutes.get() == "2" and len(sent) == 1 and str(app.btn_stop["state"]) == "normal"
 pump(1.5)
-theirs.update(ver=99, signal="speech", minutes="7", a="AVIO-A", b="AVIO-B", hear=True, src=d.TURN, mon="Amp-1 input 2")   # the other PC changes its settings
+theirs.update(ver=99, signal="voice", minutes="7", a="AVIO-A", b="AVIO-B", hear=True, src=d.TURN, mon="Amp-1 input 2")   # the other PC changes its settings
 app.poll()
-assert (app.signal.get(), app.minutes.get(), app.cb_a.get(), app.cb_b.get(), app.hear.get(), app.cb_mon.get()) == ("speech", "7", "AVIO-B", "AVIO-A", True, "Amp-1 input 2")
+assert (app.signal.get(), app.minutes.get(), app.cb_a.get(), app.cb_b.get(), app.hear.get(), app.cb_mon.get()) == ("voice", "7", "AVIO-B", "AVIO-A", True, "Amp-1 input 2")
 print("status sequence:", list(dict.fromkeys(seen)))
 print("counters:", app.counters.get())
 print("ok gui smoke")

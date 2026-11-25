@@ -6,7 +6,8 @@ A two-computer audio test for Dante USB adapters, for Windows 10/11 and macOS.
 
 Each computer plays a continuous test signal into its Dante adapter and listens for the other
 computer's signal coming back. Both directions are tested at the same time, and every fault is
-written to a timestamped log. The signal is a 1 kHz tone, speech or music.
+written to a timestamped log. By default the test runs music, then voice, then a 1 kHz tone,
+one after the other, because some laptops pass one kind of sound and remove another.
 
 It was written to track down audio dropouts with Dante USB adapters on an AMD laptop, and it
 checks the things that turned out to matter there:
@@ -76,7 +77,7 @@ Settings in the window:
 
 | Setting | Use |
 |---|---|
-| Test signal | Tone, speech or music. Choose the same on both PCs. Speech is made with each PC's built-in voice. Only the tone is checked for clicks and damaged samples; speech and music are checked for dropouts of 0.4 s or longer |
+| Signal | "music, voice, tone" runs the three one after the other, for the minutes set each (with 0 minutes: a minute each, round and round, until stopped). Or choose one of them. The voice is each PC's built-in voice. Only the tone is checked for clicks and damaged samples; music and voice are checked for dropouts of 0.4 s or longer. Both PCs move from one signal to the next together |
 | Bypass Windows audio effects (exclusive mode) | Opens the device in exclusive mode, which skips Windows' mixer and every effect attached to the device |
 | Hear ... on ... (step 2) | Tick it to listen to the test on a Dante monitor speaker or mixer on the same network. Choose the input of the monitor to use, and what to hear: one adapter, or **each adapter in turn**, which moves the monitor from one adapter to the other about every 20 seconds so you hear the audio sent and the audio received. Only inputs that nothing else is patched to are offered. When the test ends the input is put back as it was found. The PC where Start was pressed drives the monitor |
 | Windows audio enhancements (step 4 in the window) | Lists every sound device on the PC, ticked where Windows' "audio enhancements" are enabled, with the chosen Dante devices first in bold. Click a device to switch it off or on, or press **Switch all off**. Windows asks for administrator rights and keeps the setting after a restart. A device moved to a different USB port can appear as a new entry with enhancements enabled again |
@@ -126,7 +127,7 @@ The same settings are available from a command prompt. `--headless` runs without
 |---|---|
 | `--minutes N` | Stop after N minutes (default: until stopped; 5 per test with `--matrix`) |
 | `--matrix` | Run the full test |
-| `--signal tone\|speech\|music` | Test signal (default `tone`); use the same on both PCs |
+| `--signal all\|music\|voice\|tone` | Test signal (default `all`: music, then voice, then tone); use the same on both PCs |
 | `--device TEXT` | Text that identifies the adapter's audio device (default `Dante`) |
 | `--adapters A,B` | Names of the two Dante adapters to link |
 | `--no-link` | Leave the Dante routing alone |

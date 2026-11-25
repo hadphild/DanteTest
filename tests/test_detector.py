@@ -5,7 +5,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from dantetest import AMP, FREQ, SR, Detector, heard_by_peer, make_signal, results_table, summary  # noqa: E402
+import dantetest  # noqa: E402
+from dantetest import ALL, AMP, FREQ, SR, Detector, Session, heard_by_peer, make_signal, results_table, summary  # noqa: E402
 
 
 def tone(seconds, phase=0.0):
@@ -48,7 +49,7 @@ def test_silence_only():
 
 
 def test_speech_and_music_are_clean_and_a_gap_is_one_dropout():
-    for what in ("speech", "music"):   # speech uses this computer's built-in voice
+    for what in ("voice", "music"):   # voice uses this computer's built-in voice
         sig = make_signal(what)
         assert len(sig) > 5 * SR, (what, len(sig))
         x = np.tile(sig, 3)[1234:] * 0.7   # the receiver's windows never line up with the sender's
@@ -71,12 +72,44 @@ def test_results_table_and_what_the_other_pc_heard():
           "effects": ["Speakers (X): THIRD-PARTY effect 'A' (a.dll)"]}
     heads, rows = results_table(st)
     table = {name: [c[0] for c in cells] for name, cells in rows}
-    assert heads == ["Check", "AMD DISABLED", "AMD ENABLED"], heads
+    assert heads == ["Check", "AMD DISABLED, tone", "AMD ENABLED, tone"], heads
     assert table["The other PC's signal arrived here"] == ["FAIL: nothing received", "OK"], table
     assert table["... and stayed, with no dropouts"] == ["-", "OK"] and table["USB power stayed on"] == ["-", "-"], table
     assert table["This PC's playback arrived at the other PC"] == ["-", "FAIL: lost 1 time(s), 40.5 s"], table
     assert table["Audio processing on the Dante device"][0].startswith("WARNING: third-party"), table
     assert "FAIL: lost 1 time(s), 40.5 s" in summary(st)
+
+
+def test_music_then_voice_then_tone_and_following_the_other_pc():
+    import tempfile, threading
+    ran, gates, told, real = [], [], [], dantetest.run_test
+    leader = {"step": None}
+
+    def fake_test(log, st, label, stop, on_status, rec_dir=None, peer=None, sig=None, minutes=-1, until=None, before_tail=None):
+        ran.append((sig, minutes))
+        if before_tail:
+            before_tail()
+        leader["step"] = {"music#1": "voice#2", "voice#2": "end#3", "end#3": "finished#3"}.get(leader["step"])   # the other PC moves on
+        return {"signal": sig, "label": label}
+    dantetest.run_test = fake_test
+    try:
+        def session(**st):
+            state = {"phases": [], "minutes": 2, "record": False, **st}
+            return Session(Path(tempfile.mkdtemp()), state, lambda line: None, lambda s: None, lambda log, stop, step: gates.append(step),
+                           announce=told.append, leader=lambda: leader["step"])
+        session(signal=ALL).sequence("X")
+        assert ran == [("music", 2), ("voice", 2), ("tone", 2)], ran
+        assert gates == ["music#1", "voice#2", "tone#3"] and told == ["voice#2", "tone#3", "end#4"], (gates, told)
+        ran.clear(); gates.clear(); told.clear()
+        session(signal="tone", minutes=None).sequence("X")                  # one signal, until stopped
+        assert ran == [("tone", None)] and told == ["end#2"], (ran, told)
+        ran.clear(); gates.clear(); told.clear(); leader["step"] = "music#1"
+        follower = session(signal=ALL, follow=True)
+        threading.Timer(1.0, lambda: leader.update(step="finished#3")).start()   # while it waits at 'end', the other PC finishes
+        follower.follow("X")
+        assert ran == [("music", None), ("voice", None)] and gates == ["music#1", "voice#2"], (ran, gates)
+    finally:
+        dantetest.run_test = real
 
 
 if __name__ == "__main__":

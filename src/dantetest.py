@@ -2,7 +2,7 @@
 """DanteTest - two-PC audio test for Dante USB adapters.
 
 Run the same program on both PCs. Each PC plays a continuous test signal (a 1 kHz tone,
-or speech or music) into its Dante adapter and listens for the other PC's, so both directions
+voice or music) into its Dante adapter and listens for the other PC's, so both directions
 are tested at once. Every dropout, glitch, audio-driver error and Dante link change
 is written to a timestamped log in the results folder.
 """
@@ -41,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 
-VERSION = "1.13"
+VERSION = "1.14"
 SR = 48000                      # Dante adapters run at 48 kHz
 FREQ = 1000                     # test tone; SR/FREQ must be a whole number of samples
 AMP = 0.25                      # -12 dBFS
@@ -53,7 +53,8 @@ WINDOWS = platform.system() == "Windows"
 FROZEN = getattr(sys, "frozen", False)
 NO_WINDOW = 0x08000000 if WINDOWS else 0   # stop child processes flashing a console window
 HOST = socket.gethostname()
-SIGNALS = ("tone", "speech", "music")
+SIGNALS = ("music", "voice", "tone")
+ALL = "music, voice, tone"      # the default: all three, one after the other
 SPEECH = ("The birch canoe slid on the smooth planks. Glue the sheet to the dark blue background. "
           "These days a chicken leg is a rare dish. Rice is often served in round bowls. "
           "The juice of lemons makes fine punch. The box was thrown beside the parked truck.")
@@ -344,10 +345,10 @@ def heard_by_peer(before, after):
             "dropout_s": round(b.get("dropout_s", 0) - a["dropout_s"], 1)}
 
 
-def run_test(log, st, label, stop, on_status, rec_dir=None, peer=lambda: None):
-    """One test phase. Returns the stats dict. Setting `stop` ends it early.
+def run_test(log, st, label, stop, on_status, rec_dir=None, peer=lambda: None, sig=None, minutes=-1, until=None, before_tail=None):
+    """One test with one signal. Returns the stats dict. Setting `stop` ends it early, and so does `until()` turning true.
     With `rec_dir`, the signal played and everything received are saved there as WAV files."""
-    minutes, sig = st["minutes"], st.get("signal") or "tone"
+    minutes, sig, moved = st["minutes"] if minutes == -1 else minutes, sig or st.get("signal") or "tone", False
     log(f"TEST_START     {label}" + (f", {minutes:g} minutes" if minutes else ", until stopped")
         + (f", {sig} test signal" if sig != "tone" else "")
         + (", EXCLUSIVE mode (Windows audio effects bypassed)" if st.get("exclusive") else ""))
@@ -382,7 +383,7 @@ def run_test(log, st, label, stop, on_status, rec_dir=None, peer=lambda: None):
         reinit_audio()   # Windows audio must be set up on the thread that uses it; the window has already used it on another
     reopen()
     try:
-        while not stop.is_set() and (end is None or time.time() < end):
+        while not stop.is_set() and (end is None or time.time() < end) and not moved:
             try:
                 block = audio.q.get(timeout=0.25)
                 det.feed(block)
@@ -414,8 +415,9 @@ def run_test(log, st, label, stop, on_status, rec_dir=None, peer=lambda: None):
                     log(f"NO_SIGNAL      no {sig} received after 30 s. Is DanteTest running on the other PC, and is the Dante link up?")
                 s = {"state": "stalled" if stall_t else det.state, "level": det.level, "now": det.now, "dropouts": det.dropouts,
                      "dropout_s": det.dropout_now(), "glitches": det.glitches, "driver_errors": sum(audio.xrun.values()),
-                     "elapsed": now - t0, "left": end - now if end else None, "label": label}
+                     "elapsed": now - t0, "left": end - now if end else None, "label": f"{label}, {sig}"}
                 on_status(s)
+                moved = bool(until and until())   # the other PC has moved on to its next signal
                 if now - last_beat >= 60:
                     last_beat = now
                     log("STATUS         " + status_text(s), echo=False)
@@ -426,7 +428,9 @@ def run_test(log, st, label, stop, on_status, rec_dir=None, peer=lambda: None):
         stats["usb_changes"] = (log.counts.get("USB_POWER CHANGE:", 0) - counts0.get("USB_POWER CHANGE:", 0)) if st.get("usb") else None
         # Keep playing a little longer without listening: the other PC finishes a moment before or after
         # this one, and must not log this PC stopping as a dropout.
-        tail = time.time() + (1.5 if stop.is_set() else 3)
+        if before_tail:
+            before_tail()
+        tail = time.time() + (0 if moved else 1.5 if stop.is_set() else 3)
         while time.time() < tail:
             try:
                 audio.q.get(timeout=0.25)
@@ -892,7 +896,7 @@ def results_table(st):
         warn = [w for w, hit in (("enhancements enabled", any("NOT switched off" in e for e in fx)),
                                  ("third-party effects attached", any("THIRD-PARTY" in e for e in fx))) if hit]
         rows.append(("Audio processing on the Dante device", [(("WARNING: " + ", ".join(warn), "warn") if warn else ok)] * len(st["phases"])))
-    return ["Check"] + [p["label"] + ("" if p.get("signal", "tone") == "tone" else f", {p['signal']}") for p in st["phases"]], rows
+    return ["Check"] + [f"{p['label']}, {p.get('signal', 'tone')}" for p in st["phases"]], rows
 
 
 def summary(st):
@@ -900,7 +904,7 @@ def summary(st):
              "This PC measures the audio it RECEIVES: the other PC plays the test signal, it travels over",
              "Dante, and this PC records it. Audio PLAYED by this PC is measured in the other PC's log.", ""]
     for n, p in enumerate(st["phases"], 1):
-        lines += [f"Test {n}: {p['label']}", f"  {p['start']} to {p['end']}",
+        lines += [f"Test {n}: {p['label']}, {p.get('signal', 'tone')}", f"  {p['start']} to {p['end']}",
                   f"  RESULT: {verdict(p)}",
                   f"  listened {p['listened_s']} s, clean signal {p['tone_s']} s, dropouts {p['dropouts']} "
                   f"(total {p['dropout_s']} s, longest {p['longest_dropout_s']} s), damaged blocks {p['glitch_blocks']}",
@@ -940,9 +944,9 @@ def new_out_dir(base=None):
 
 
 def new_state(device_in, device_out, minutes, adapters, link, matrix, headless=False, exclusive=False, usb_power=False, signal="tone",
-              record=False, monitor=None):
+              record=False, monitor=None, follow=False):
     return {"phases": [], "device_in": device_in, "device_out": device_out, "minutes": minutes or None, "adapters": adapters,
-            "link": link, "matrix": matrix, "headless": headless, "exclusive": exclusive, "usb_power": usb_power, "signal": signal, "record": record, "monitor": monitor,
+            "link": link, "matrix": matrix, "headless": headless, "exclusive": exclusive, "usb_power": usb_power, "signal": signal, "record": record, "monitor": monitor, "follow": follow,
             "step": "start", "effects": [], "usb": []}
 
 
@@ -953,8 +957,9 @@ def amd_label(state):
 class Session:
     """Runs in a worker thread. run() returns 'done', 'restart' (mid full test) or 'restart-final'."""
 
-    def __init__(self, out, st, sink, on_status, gate=None, peer=lambda: None):
+    def __init__(self, out, st, sink, on_status, gate=None, peer=lambda: None, announce=lambda step: None, leader=lambda: None):
         self.out, self.st, self.on_status, self.gate, self.peer = out, st, on_status, gate, peer
+        self.announce, self.leader = announce, leader   # tell the other PC which step this one is on; ask which step it is on
         self.log = Log(out / "events.log", sink)
         self.stop = threading.Event()
 
@@ -992,15 +997,58 @@ class Session:
         if undo and pair and (st.get("monitor") or "").endswith("=" + TURN):
             threading.Thread(target=monitor_follow, args=(self.log, st["monitor"], pair, link_stop), daemon=True).start()
         try:
-            if self.gate:
-                self.gate(self.log, self.stop)   # both PCs started together: wait until the other has done its checks too
-            st["phases"].append(run_test(self.log, st, label, self.stop, self.on_status,
-                                         self.out if st.get("record") else None, self.peer))
+            self.follow(label) if st.get("follow") else self.sequence(label)
         finally:
             link_stop.set()
             if undo:
                 monitor_patch(self.log, st.get("monitor"), pair, undo=undo)
         save(st, self.out)
+
+    def one(self, label, sig, minutes, **more):
+        self.st["phases"].append(run_test(self.log, self.st, label, self.stop, self.on_status,
+                                          self.out if self.st.get("record") else None, self.peer, sig=sig, minutes=minutes, **more))
+
+    def sequence(self, label):
+        """The tests for this PC as it is now: one signal, or music then voice then tone. Each step has a name such as
+        'voice#2', which both PCs announce, so they start each step together."""
+        st = self.st
+        signals, minutes, repeat = ([st.get("signal") or "tone"], st["minutes"], False) if st.get("signal") != ALL else \
+            (list(SIGNALS), st["minutes"] or 1, not st["minutes"])   # all three with no time limit: round and round, a minute each
+        n = 0
+        while not self.stop.is_set():
+            last = not repeat and n == len(signals) - 1
+            number = len(st["phases"]) + 1
+            if self.gate:
+                self.gate(self.log, self.stop, f"{signals[n % len(signals)]}#{number}")
+            if self.stop.is_set():
+                break
+            after = f"end#{number + 1}" if last else f"{signals[(n + 1) % len(signals)]}#{number + 1}"
+            self.one(label, signals[n % len(signals)], minutes, before_tail=lambda: self.announce(after))
+            n += 1
+            if last:
+                break
+
+    def follow(self, label):
+        """Started by the other PC's full test: play and listen to whichever signal it is on, and move when it moves.
+        While it is away (restarting) carry on; when it says it has finished, stop."""
+        st, waited = self.st, time.time()
+        while not self.stop.is_set():
+            step = self.leader()
+            if step is None and not st["phases"] and time.time() - waited < 120:
+                time.sleep(0.3)                                  # the other PC is still doing its checks
+                continue
+            if step and step.startswith("finished"):
+                break
+            if step and step.startswith("end"):                  # between its tests: wait for the next one
+                self.announce(step)
+                while not self.stop.is_set() and self.leader() in (None, step):
+                    time.sleep(0.3)
+                continue
+            sig = step.split("#")[0] if step else st["phases"][-1]["signal"] if st["phases"] else SIGNALS[0]
+            if self.gate:
+                self.gate(self.log, self.stop, step or f"{sig}#alone")
+            if not self.stop.is_set():
+                self.one(label, sig if sig in SIGNALS else SIGNALS[0], None, until=lambda s=step: self.leader() not in (None, s))
 
     def run(self):
         st, log, out = self.st, self.log, self.out
@@ -1015,6 +1063,7 @@ class Session:
             self.report_effects()
             self.phase(amd_label(state))
             log(f"RESTORE        {set_amd(st['original'])}")
+            self.announce(f"finished#{len(st['phases'])}")   # the other PC, which has been following, can stop now
             st["step"] = "finished"
             save(st, out)
             log("RESTART        restarting in 60 s to put the AMD USB Audio Device back as it was (to cancel: shutdown /a)")
@@ -1063,6 +1112,9 @@ class Peers:
         self.found, self.done = {}, set()     # id -> (host, ip, state, last heard); ids of commands already handled
         self.cfg = {}                         # id -> the settings that PC last announced
         self.live = {}                        # id -> the counters of the test running (or last run) on that PC
+        self.steps = {}                       # id -> the step that PC is ready for or running, such as 'voice#2'
+        self.nexts = {}                       # id -> the step it has said it will move to when the present one ends
+
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1115,6 +1167,8 @@ class Peers:
                     self.cfg[m["from"]] = m["cfg"]
                 if m.get("t") == "hello":
                     self.live[m["from"]] = m.get("live")
+                    self.steps[m["from"]] = m.get("step")
+                    self.nexts[m["from"]] = m.get("next")
                 if m.get("t") in ("start", "stop") and m.get("id") not in self.done:
                     self.done.add(m.get("id"))
                     self.on_command(m)
@@ -1125,6 +1179,18 @@ class Peers:
         """[(host, ip, state)] for the DanteTest windows heard from in the last 5 seconds."""
         now = time.time()
         return sorted((h, ip, st) for h, ip, st, t in self.found.values() if now - t < 5)
+
+    def _live(self):
+        now = time.time()
+        return [(k, v) for k, v in sorted(self.found.items()) if now - v[3] < 5]
+
+    def at(self, step):
+        """True when another PC is ready for, or running, this same step."""
+        return any(self.steps.get(k) == step and v[2] in ("armed", "testing") for k, v in self._live())
+
+    def leader_step(self):
+        """The step the other PC is on, or is about to move to; None if no PC is announcing one."""
+        return next((self.nexts.get(k) or self.steps[k] for k, _ in self._live() if self.nexts.get(k) or self.steps.get(k)), None)
 
     def heard(self):
         """(host, counters) from the other PC's test: what it has received from this PC. None if no PC reports any."""
@@ -1295,10 +1361,10 @@ class App:
         row = ttk.Frame(test)
         row.grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(row, text="Signal").pack(side="left", **pad)
-        self.signal = ttk.Combobox(row, state="readonly", values=SIGNALS, width=8)
+        self.signal = ttk.Combobox(row, state="readonly", values=(ALL, *SIGNALS), width=16)
         self.signal.set(args.signal)
         self.signal.pack(side="left", **pad)
-        ttk.Label(row, text="   Minutes (0 = until stopped)").pack(side="left", **pad)
+        ttk.Label(row, text="  Minutes each (0 = until stopped)").pack(side="left", **pad)
         self.minutes = tk.StringVar(value=f"{args.minutes:g}" if args.minutes else "0")
         ttk.Spinbox(row, from_=0, to=1440, width=5, textvariable=self.minutes).pack(side="left", **pad)
         ttk.Label(test, text="The other PC is given the same signal and minutes when it is started from here.").grid(row=1, column=0, columnspan=2, sticky="w", **pad)
@@ -1356,7 +1422,9 @@ class App:
         self.sharing = True   # a copy of the tick box: the network threads must not touch the window's own variables
         self.live = None      # this PC's counters for the test running or last run, sent to the other PC
         self.net = Peers(lambda m: self.q.put(("peer", m)), lambda: self.stage if self.running() else "ready",
-                         lambda: {"cfg": {**self.cfg, "ver": self.cfg_ver} if self.cfg and self.sharing else None, "live": self.live})
+                         lambda: {"cfg": {**self.cfg, "ver": self.cfg_ver} if self.cfg and self.sharing else None, "live": self.live,
+                                  "step": self.step_now if self.running() else None, "next": self.step_next})
+        self.step_now, self.step_next, self.follow_next = None, None, False
 
         self.status = tk.Label(right, text="Ready - press Start test", bg=COLOURS["idle"], fg="white",
                                font=("Segoe UI", 16, "bold"), pady=10)
@@ -1382,6 +1450,7 @@ class App:
         if args.cont:   # carrying on a saved run: started elevated, or after the restart
             self.out = Path(args.cont)
             st = json.loads((self.out / "state.json").read_text())
+            self.together = True   # a run carried on after elevation or a restart still works with the other PC
             self.minutes.set(f"{st.get('minutes') or 0:g}")   # show the settings this run was started with
             self.signal.set(st.get("signal") or "tone")
             for cb, kind in ((self.cb_out, "output"), (self.cb_in, "input")):
@@ -1459,12 +1528,12 @@ class App:
         st = new_state(pattern_for(self.cb_in.get()), pattern_for(self.cb_out.get()), minutes,
                        [a, b] if a and b and a != b else None, self.link_var.get(), matrix, exclusive=self.exclusive.get(),
                        usb_power=self.usb_power.get(), signal=self.signal.get(),
-                       record=self.record.get(), monitor=monitor)
+                       record=self.record.get(), monitor=monitor, follow=from_peer and self.follow_next)
         self.out = new_out_dir(self.args.out)
         save(st, self.out)
         self.together = from_peer or bool(self.remote.get() and self.net.others())
         if self.remote.get() and not from_peer:   # the other PC runs a plain test; during a full test it runs until stopped
-            self.net.command("start", signal=st["signal"], minutes=0 if matrix else minutes)
+            self.net.command("start", signal=st["signal"], minutes=minutes, follow=bool(matrix))
         if matrix and WINDOWS and not is_admin():   # switching the device needs administrator rights
             if run_elevated(["--continue", str(self.out)]):
                 self.root.destroy()
@@ -1477,8 +1546,9 @@ class App:
         self.out_var.set(str(self.out))
         self.stage = "checking"
         self.session = Session(self.out, st, lambda line: self.q.put(("log", line)), lambda s: self.q.put(("status", s)),
-                               self.wait_for_other_pc if self.together else None, self.net.heard)
-        self.live, self.run_id = None, time.time()
+                               self.wait_for_other_pc if self.together else None, self.net.heard,
+                               lambda step: setattr(self, "step_next", step), self.net.leader_step)
+        self.live, self.run_id, self.step_now, self.step_next = None, time.time(), None, None
         self.table.grid_remove()
         self.graph.grid()
         self.together = False   # only the run just started; a test that carries on after a restart starts by itself
@@ -1500,19 +1570,20 @@ class App:
         self.set_status("waiting", "Starting...")
         self.draw()
 
-    def wait_for_other_pc(self, log, stop):
-        """Runs in the test thread, after this PC's checks. The Dante link check takes a different time on each PC,
-        so the test itself starts only when the other PC is ready too (or plainly is not going to be)."""
-        self.stage, armed = "armed", time.time()
-        log("SYNC           this PC is ready; waiting for the other PC to finish its checks")
+    def wait_for_other_pc(self, log, stop, step):
+        """Runs in the test thread before each step (a step is one signal, named like 'voice#2'). Each PC's checks and
+        each change of signal take a different time on each PC, so a step starts only when the other PC is ready for
+        the same step too, or plainly is not going to be."""
+        self.stage, self.step_now, self.step_next, armed = "armed", step, None, time.time()
+        log(f"SYNC           ready for {step.split('#')[0]}; waiting for the other PC")
         while not stop.is_set():
             stages = [st for _, _, st in self.net.others()]
             waited = time.time() - armed
-            if any(st in ("armed", "testing") for st in stages):
+            if self.net.at(step):
                 log("SYNC           both PCs are ready; starting together")
                 break
-            if waited > 90 or (waited > 10 and "checking" not in stages):
-                log("SYNC           the other PC has not started a test; starting on this PC alone")
+            if waited > 90 or (waited > 10 and not any(st in ("checking", "armed", "testing") for st in stages)):
+                log("SYNC           the other PC is not running this test; starting on this PC alone")
                 break
             time.sleep(0.2)
         self.stage = "testing"
@@ -1582,13 +1653,15 @@ class App:
         heads, rows = results_table(st)
         pal = palette(self.root)   # every cell sets both its background and its text colour
         self.table.config(bg=pal["line"])
+        many = len(heads) > 4   # more than three tests: short headings and one-word cells, the detail is in the log below
         for col, text in enumerate(heads):
+            text = text.replace("AMD USB Audio Device ", "AMD ").replace("this PC as it stands", "This PC").replace(", ", "\n")
             tk.Label(self.table, text=text, font=("Segoe UI", 9, "bold"), bg=pal["head"], fg=pal["text"], anchor="w", padx=6, wraplength=230,
                      justify="left").grid(row=0, column=col, sticky="nsew", padx=1, pady=1)
         for r, (name, cells) in enumerate(rows, 1):
             tk.Label(self.table, text=name, bg=pal["cell"], fg=pal["text"], anchor="w", padx=6).grid(row=r, column=0, sticky="nsew", padx=1, pady=(0, 1))
             for col, (text, kind) in enumerate(cells, 1):
-                tk.Label(self.table, text=text, bg=pal[kind], fg=pal["text"], anchor="w", padx=6,
+                tk.Label(self.table, text=text.split(":")[0] if many else text, bg=pal[kind], fg=pal["text"], anchor="w", padx=6,
                          font=("Segoe UI", 9, "bold" if kind == "fail" else "normal")).grid(row=r, column=col, sticky="nsew", padx=(0, 1), pady=(0, 1))
         for col in range(1, len(heads)):
             self.table.columnconfigure(col, weight=1)
@@ -1636,7 +1709,8 @@ class App:
             if not self.remote.get():
                 self.write(f"{who} asked this PC to {val['t']}; ignored because the box below Start is not ticked")
             elif val["t"] == "start" and not self.running():
-                self.signal.set(val.get("signal") if val.get("signal") in SIGNALS else "tone")
+                self.signal.set(val.get("signal") if val.get("signal") in (ALL, *SIGNALS) else ALL)
+                self.follow_next = bool(val.get("follow"))   # the other PC is running a full test: follow its signals
                 self.minutes.set(f"{float(val.get('minutes') or 0):g}")
                 self.write(f"Started from {who}")
                 self.start(False, from_peer=True)
@@ -1664,7 +1738,9 @@ class App:
             head = {"waiting": "Waiting for the other PC's signal", "ok": f"RECEIVING OK   {val['level']:.1f} dBFS",
                     "dropout": "DROPOUT - signal lost", "stalled": "AUDIO DEVICE STALLED"}[val["state"]]
             self.set_status(val["state"], head)
-            self.live = {"id": self.run_id, "running": True, "arrived": bool((self.live or {}).get("arrived")) or val["state"] == "ok",
+            key = f"{self.run_id}-{val['label']}"   # counters are per signal: music arriving says nothing about tone
+            before = self.live if self.live and self.live.get("id") == key else {}
+            self.live = {"id": key, "running": True, "arrived": bool(before.get("arrived")) or val["state"] == "ok",
                          "dropouts": val["dropouts"], "dropout_s": round(val["dropout_s"], 1)}
             self.last = val
             self.hist = (self.hist + [(val["state"], val.get("now", val["level"]))])[-2000:]
@@ -1705,7 +1781,7 @@ class App:
         theirs = self.net.newest_settings()
         if not (theirs and self.remote.get() and theirs.get("ver", 0) > self.cfg_ver and not self.running()):
             return
-        if theirs.get("signal") in SIGNALS:
+        if theirs.get("signal") in (ALL, *SIGNALS):
             self.signal.set(theirs["signal"])
         self.minutes.set(str(theirs.get("minutes", "0")))
         for cb, value in ((self.cb_a, theirs.get("b")), (self.cb_b, theirs.get("a")),
@@ -1740,8 +1816,9 @@ def main():
     ap.add_argument("--monitor", metavar="'DEVICE input N=ADAPTER'",
                     help="also patch ADAPTER's channel 1 to input N of another Dante device (a monitor speaker) for the test, "
                          "so it can be heard; only if that input is free, and taken off again afterwards")
-    ap.add_argument("--signal", choices=SIGNALS, default="tone",
-                    help="test signal; use the same on both PCs. speech uses the PC's built-in voice (default: tone)")
+    ap.add_argument("--signal", choices=("all", *SIGNALS), default="all",
+                    help="test signal; use the same on both PCs. all = music, then voice, then tone, --minutes each (a minute "
+                         "each, round and round, if no --minutes). voice uses the PC's built-in voice (default: all)")
     ap.add_argument("--record", action="store_true",
                     help="save the signal played and all the audio received as WAV files in the results folder")
     ap.add_argument("--exclusive", action="store_true",
@@ -1757,6 +1834,7 @@ def main():
     ap.add_argument("--out", help="results folder (default: DanteTest-results next to the program)")
     ap.add_argument("--continue", dest="cont", help=argparse.SUPPRESS)   # internal: carry on a run saved in this folder
     args = ap.parse_args()
+    args.signal = ALL if args.signal == "all" else args.signal
 
     say = (lambda line: print(line, flush=True)) if sys.stdout else (lambda line: None)
     if args.enhancements:
