@@ -1,0 +1,6 @@
+[project]
+name = "dante-linktest"
+version = "1.11"
+description = "Two-PC audio test for Dante USB adapters"
+requires-python = ">=3.10"
+dependencies = ["netaudio", "sounddevice", "numpy"]

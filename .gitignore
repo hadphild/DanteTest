@@ -1,0 +1,11 @@
+_not_used/
+.venv/
+__pycache__/
+*.log
+dist/
+results/
+DanteTest-results/
+proof-*/
+proof-*.zip
+build/
+.DS_Store
