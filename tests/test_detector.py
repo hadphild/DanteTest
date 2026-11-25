@@ -112,6 +112,13 @@ def test_music_then_voice_then_tone_and_following_the_other_pc():
         dantetest.run_test = real
 
 
+def test_cpu_maker():
+    assert dantetest.cpu_maker("AMD64 Family 26 Model 36 Stepping 0, AuthenticAMD") == "AMD"
+    assert dantetest.cpu_maker("Intel64 Family 6 Model 186 Stepping 2, GenuineIntel") == "Intel"
+    assert dantetest.cpu_maker("i386") == "Intel" and dantetest.cpu_maker("arm") == "Apple"
+    assert dantetest.cpu_maker("ARMv8 (64-bit) Family 8 Model 1 Revision 201, Qualcomm Technologies Inc") == "other"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

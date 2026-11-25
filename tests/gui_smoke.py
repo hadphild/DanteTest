@@ -80,5 +80,7 @@ app.poll()
 assert (app.signal.get(), app.minutes.get(), app.cb_a.get(), app.cb_b.get(), app.hear.get(), app.cb_mon.get()) == ("voice", "7", "AVIO-B", "AVIO-A", True, "Amp-1 input 2")
 print("status sequence:", list(dict.fromkeys(seen)))
 print("counters:", app.counters.get())
+d.CPU = "Intel"; app.handle("amd", None)      # an Intel PC: no AMD device, so it says the basic test is what runs
+assert app.amd_var.get() == "Intel processor: basic test", app.amd_var.get()
 print("ok gui smoke")
 root.destroy()

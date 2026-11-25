@@ -19,6 +19,10 @@ checks the things that turned out to matter there:
 - USB power saving on the adapter and its hubs
 - on AMD laptops, the AMD USB Audio (offload) Device: a full test runs with it enabled and disabled
 
+The app checks whether the PC has an Intel or AMD processor and shows it beside the buttons. On an
+Intel PC (and any PC without the AMD USB Audio Device) it runs the basic test only: play and listen
+with music, voice and tone. The full test is only offered where there is an AMD device to switch.
+
 DanteTest is not made or endorsed by Audinate. Dante is a trademark of Audinate Pty Ltd.
 
 ## What you need

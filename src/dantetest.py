@@ -41,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 
-VERSION = "1.14"
+VERSION = "1.15"
 SR = 48000                      # Dante adapters run at 48 kHz
 FREQ = 1000                     # test tone; SR/FREQ must be a whole number of samples
 AMP = 0.25                      # -12 dBFS
@@ -53,6 +53,16 @@ WINDOWS = platform.system() == "Windows"
 FROZEN = getattr(sys, "frozen", False)
 NO_WINDOW = 0x08000000 if WINDOWS else 0   # stop child processes flashing a console window
 HOST = socket.gethostname()
+
+
+def cpu_maker(ident=None):
+    """'AMD', 'Intel', 'Apple' or 'other': decides whether the AMD-only full test applies to this PC."""
+    ident = platform.processor() if ident is None else ident   # Windows: '..., AuthenticAMD'; Mac: 'arm' or 'i386'
+    return "AMD" if "AuthenticAMD" in ident else "Intel" if "GenuineIntel" in ident or ident == "i386" else \
+        "Apple" if ident == "arm" else "other"
+
+
+CPU = cpu_maker()
 SIGNALS = ("music", "voice", "tone")
 ALL = "music, voice, tone"      # the default: all three, one after the other
 SPEECH = ("The birch canoe slid on the smooth planks. Glue the sheet to the dark blue background. "
@@ -815,7 +825,7 @@ def sysinfo():
 
 def amd_state():
     """'enabled', 'disabled', or None when this PC has no AMD USB Audio Device."""
-    if not WINDOWS:
+    if not WINDOWS or CPU == "Intel":   # an Intel PC cannot have it, so do not spend 2 s asking Windows
         return None
     out = ps(f"$d = Get-PnpDevice | ? InstanceId -like '{AMD_ID}*' | select -First 1; if ($d) {{ [int]$d.ConfigManagerErrorCode }}")
     return {"22": "disabled", "": None}.get(out, "enabled" if out.isdigit() else None)
@@ -1072,10 +1082,10 @@ class Session:
 
         (out / "sysinfo.txt").write_text(f"DanteTest {VERSION} on {HOST}, {dt.datetime.now():%Y-%m-%d %H:%M:%S}\n\n{sysinfo()}\n")
         state = amd_state()
-        log(f"SYSTEM         DanteTest {VERSION}, {HOST}, {platform.platform()}, AMD USB Audio Device: {state or 'not present'}")
+        log(f"SYSTEM         DanteTest {VERSION}, {HOST}, {platform.platform()}, {CPU} processor, AMD USB Audio Device: {state or 'not present'}")
         self.report_effects()
         if st["matrix"] and not state:
-            log("FULL_TEST      skipped: this PC has no AMD USB Audio Device; running a single test")
+            log(f"FULL_TEST      skipped: {CPU} processor with no AMD USB Audio Device to switch; running the basic test")
             st["matrix"] = False
         if not st["matrix"]:
             self.phase(amd_label(state))
@@ -1685,8 +1695,8 @@ class App:
                 self.draw()
         elif kind == "amd":
             self.amd = val
+            self.amd_var.set(f"{CPU} processor, AMD USB Audio Device: {val}" if val else f"{CPU} processor: basic test")
             if WINDOWS and val:   # the full test only exists on a PC with the AMD device, so only show it there
-                self.amd_var.set(f"AMD USB Audio Device: {val}")
                 self.btn_full.pack(side="left")
                 if not self.running():
                     self.btn_full["state"] = "normal"
